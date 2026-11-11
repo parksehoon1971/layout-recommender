@@ -28,3 +28,6 @@
 *.unitypackage
 crashlytics-build.properties
 .DS_Store
+
+# 패키지 잠금 파일은 각 PC에서 생성
+/Packages/packages-lock.json

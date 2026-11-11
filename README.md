@@ -4,7 +4,7 @@
 
 ## 실행 방법
 1. `git clone`으로 저장소를 받습니다.
-2. Unity Hub → **Add project from disk** → 받은 폴더를 선택합니다. 처음 열 때 Unity가 `Library`, `Packages`, 나머지 `ProjectSettings` 파일을 자동으로 만듭니다.
+2. Unity Hub → **Add project from disk** → 받은 폴더를 선택합니다. 필요한 패키지(Unity UI 등)는 `Packages/manifest.json`에 들어 있어서 처음 열 때 자동으로 설치됩니다.
 3. 열린 씬(기본 Untitled 씬도 괜찮습니다)에서 **Play**를 누릅니다.
    씬에 따로 배치할 것은 없습니다. 실행하면 `AppManager`가 자동으로 생성되고, 화면은 모두 코드로 만들어집니다.
 4. 이후 업데이트는 `git pull`로 받습니다. Unity가 열려 있어도 자동으로 다시 컴파일됩니다.
