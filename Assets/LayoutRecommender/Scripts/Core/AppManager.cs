@@ -15,7 +15,7 @@ namespace LayoutRecommender.Core
         static void Init()
         {
             if (GameObject.Find("DisableLayoutRecommender") != null) return;
-            if (Object.FindFirstObjectByType<AppManager>() != null) return;
+            if (Object.FindAnyObjectByType<AppManager>() != null) return;
             new GameObject("LayoutRecommenderApp").AddComponent<AppManager>();
         }
     }
