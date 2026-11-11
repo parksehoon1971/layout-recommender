@@ -9,7 +9,7 @@ namespace LayoutRecommender.World
     /// <summary>3D로 배치된 설비 하나. 클릭하면 이 컴포넌트로 배치 정보를 찾는다.</summary>
     public class EquipmentInstance : MonoBehaviour
     {
-        public PlacedItem Item;
+        public PlacedItem Item { get; set; }   // 실행 중에만 쓰는 값 (직렬화하지 않음)
         public Transform Lift;   // 스태커크레인 승강대 (없으면 null)
 
         readonly List<Renderer> _renderers = new List<Renderer>();
