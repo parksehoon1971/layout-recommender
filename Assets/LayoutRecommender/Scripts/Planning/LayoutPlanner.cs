@@ -152,6 +152,15 @@ namespace LayoutRecommender.Planning
 
             AddDocks(plan, s, input.building.inboundDocks, true);
             AddDocks(plan, s, input.building.outboundDocks, false);
+
+            var f = plan.Flow;
+            f.CorridorInZ = s.InStage.yMin + s.InStage.height * 0.85f;
+            f.CorridorOutZ = s.OutStage.yMin + s.OutStage.height * 0.15f;
+            f.InDockQueueZ = -s.D / 2f + DockDepth + 1.5f;
+            f.OutDockQueueZ = s.D / 2f - DockDepth - 1.5f;
+            foreach (var d in plan.Docks)
+                (d.Inbound ? f.InDockX : f.OutDockX).Add(d.Center.x);
+            f.HandlingSeconds = input.cargo.unitType == LoadUnitType.Pallet ? 20f : 8f;
         }
 
         static void AddDocks(LayoutPlan plan, Site s, int count, bool inbound)
@@ -164,7 +173,7 @@ namespace LayoutRecommender.Planning
         }
 
         /// <summary>대기 구역에 차량/인원을 줄 세워 배치 (입고/출고 번갈아)</summary>
-        static void PlaceFleet(LayoutPlan plan, Site s, EquipmentType t, int count, string labelPrefix)
+        static void PlaceFleet(LayoutPlan plan, Site s, EquipmentType t, int count, string labelPrefix, bool mover = true)
         {
             if (count <= 0) return;
             var def = EquipmentCatalog.Get(t);
@@ -189,7 +198,8 @@ namespace LayoutRecommender.Planning
                     Type = t, Shape = person ? ItemShape.Person : ItemShape.Vehicle,
                     Center = new Vector3(x, 0, z), Size = size,
                     Label = $"{labelPrefix} {i + 1}",
-                    Detail = $"{(inbound ? "입고" : "출고")} 측 대기 · {def.Description}"
+                    Detail = $"{(inbound ? "입고" : "출고")} 측 대기 · {def.Description}",
+                    IsMover = mover
                 });
             }
             plan.AddCount(t, count);
@@ -282,7 +292,8 @@ namespace LayoutRecommender.Planning
                         Type = EquipmentType.SelectiveRack, Shape = ItemShape.RackRow,
                         Center = new Vector3(cx, 0, s.StorCenterZ), Size = new Vector3(rowDepth, rackH, rowLen),
                         Label = $"랙 {rowNo++}열",
-                        Detail = $"{levels}단 × {perRowLevel}칸 = {levels * perRowLevel}위치 · 통로폭 {aisle:0.0}m"
+                        Detail = $"{levels}단 × {perRowLevel}칸 = {levels * perRowLevel}위치 · 통로폭 {aisle:0.0}m",
+                        Levels = levels, LevelPitch = u.Pitch, SlotWidth = u.Face, Unit = input.cargo.unitType, Fill = 0.75f
                     });
                 }
                 aisleCenters.Add(x0 + pairW + aisle / 2f);
@@ -339,15 +350,18 @@ namespace LayoutRecommender.Planning
                     Type = handler, Shape = person ? ItemShape.Person : ItemShape.Vehicle,
                     Center = new Vector3(ax, 0, z),
                     Size = person ? new Vector3(0.6f, 1.7f, 0.6f) : new Vector3(hdef.FootprintWidthM, VehicleHeight(handler), hdef.FootprintDepthM),
-                    Label = $"{hdef.NameKo} {i + 1}", Detail = "보관 구역 통로 작업 · " + hdef.Description
+                    Label = $"{hdef.NameKo} {i + 1}", Detail = "보관 구역 통로 작업 · " + hdef.Description,
+                    IsMover = true
                 });
             }
             plan.AddCount(handler, handlers);
+            foreach (var ax in aisleCenters)
+                plan.Flow.Access.Add(new AccessPoint { X = ax, IntoAisle = true, SlotZMin = s.StorZ0 + 4f, SlotZMax = s.StorZ1 - 4f, ZIn = s.StorCenterZ, ZOut = s.StorCenterZ });
 
             if (u.Pallet && Allowed(input, EquipmentType.PalletTruck))
             {
                 int pts = Mathf.Max(1, (input.building.inboundDocks + input.building.outboundDocks) / 3);
-                PlaceFleet(plan, s, EquipmentType.PalletTruck, pts, "파렛트트럭");
+                PlaceFleet(plan, s, EquipmentType.PalletTruck, pts, "파렛트트럭", false);
                 capex += pts * CostPalletTruck;
                 extraWorkers += pts;
             }
@@ -419,7 +433,8 @@ namespace LayoutRecommender.Planning
                     Type = EquipmentType.ShuttleRack, Shape = ItemShape.ShuttleBlock,
                     Center = new Vector3(x + w / 2f, 0, s.StorCenterZ), Size = new Vector3(w, rackH, laneLen),
                     Label = $"셔틀랙 블록 {b + 1}",
-                    Detail = $"레인 {n}개 × {levels}단 × 깊이 {perLane} = {n * levels * perLane}위치"
+                    Detail = $"레인 {n}개 × {levels}단 × 깊이 {perLane} = {n * levels * perLane}위치",
+                    Levels = levels, LevelPitch = u.Pitch, SlotWidth = laneW, Unit = input.cargo.unitType, Fill = Mathf.Max(0.35f, fill * 0.8f)
                 });
                 x += w + gap;
             }
@@ -446,6 +461,8 @@ namespace LayoutRecommender.Planning
 
             float faceZIn = s.StorCenterZ - laneLen / 2f - 2.5f;
             float faceZOut = s.StorCenterZ + laneLen / 2f + 2.5f;
+            foreach (var bc in blockCenters)
+                plan.Flow.Access.Add(new AccessPoint { X = bc, ZIn = liftFed ? faceZIn - 1.2f : faceZIn, ZOut = liftFed ? faceZOut + 1.2f : faceZOut });
             if (liftFed)
             {
                 AddConveyorRun(plan, new Vector3(0, 0, faceZIn), new Vector3(totalW, 0.8f, 1.2f), "입고 컨베이어 (블록 앞면)");
@@ -468,7 +485,8 @@ namespace LayoutRecommender.Planning
                         Type = EquipmentType.Forklift, Shape = ItemShape.Vehicle,
                         Center = new Vector3(fx, 0, front ? faceZIn - 0.5f : faceZOut + 0.5f),
                         Size = new Vector3(fdef.FootprintWidthM, VehicleHeight(EquipmentType.Forklift), fdef.FootprintDepthM),
-                        Label = $"지게차 {i + 1}", Detail = (front ? "입고 면" : "출고 면") + "에서 레인 입구에 적치"
+                        Label = $"지게차 {i + 1}", Detail = (front ? "입고 면" : "출고 면") + "에서 레인 입구에 적치",
+                        IsMover = true
                     });
                 }
                 plan.AddCount(EquipmentType.Forklift, forks);
@@ -541,18 +559,21 @@ namespace LayoutRecommender.Planning
                 plan.Items.Add(new PlacedItem
                 {
                     Type = type, Shape = ItemShape.RackRow, Center = new Vector3(r1, 0, s.StorCenterZ), Size = new Vector3(rowDepth, rackH, len),
-                    Label = $"자동창고 랙 {i * 2 + 1}열", Detail = $"{levels}단 × {perRowLevel}칸"
+                    Label = $"자동창고 랙 {i * 2 + 1}열", Detail = $"{levels}단 × {perRowLevel}칸",
+                    Levels = levels, LevelPitch = u.Pitch, SlotWidth = u.Face, Unit = input.cargo.unitType, Fill = 0.8f
                 });
                 plan.Items.Add(new PlacedItem
                 {
                     Type = type, Shape = ItemShape.RackRow, Center = new Vector3(r2, 0, s.StorCenterZ), Size = new Vector3(rowDepth, rackH, len),
-                    Label = $"자동창고 랙 {i * 2 + 2}열", Detail = $"{levels}단 × {perRowLevel}칸"
+                    Label = $"자동창고 랙 {i * 2 + 2}열", Detail = $"{levels}단 × {perRowLevel}칸",
+                    Levels = levels, LevelPitch = u.Pitch, SlotWidth = u.Face, Unit = input.cargo.unitType, Fill = 0.8f
                 });
                 float cz = s.StorCenterZ + len * 0.35f * Mathf.Sin(i * 1.7f);
                 plan.Items.Add(new PlacedItem
                 {
                     Type = type, Shape = ItemShape.Mast, Center = new Vector3(ac, 0, cz), Size = new Vector3(aisle * 0.7f, rackH + 1f, 2.0f),
-                    Label = $"{craneDef.NameKo} {i + 1}호기", Detail = $"통로 {i + 1} · {cycles:0}건/시간 · {craneDef.Description}"
+                    Label = $"{craneDef.NameKo} {i + 1}호기", Detail = $"통로 {i + 1} · {cycles:0}건/시간 · {craneDef.Description}",
+                    AisleIndex = i, RailCenterZ = s.StorCenterZ, RailLength = len, Levels = levels, LevelPitch = u.Pitch, Unit = input.cargo.unitType
                 });
             }
             plan.AddCount(type, aisles);
@@ -581,6 +602,14 @@ namespace LayoutRecommender.Planning
             else
             {
                 plan.Notes.Add("컨베이어를 제외해서 P&D 지점에서 운반 설비가 직접 주고받습니다.");
+            }
+
+            bool hasConv = Allowed(input, EquipmentType.Conveyor);
+            for (int i = 0; i < aisles; i++)
+            {
+                float ac = startX + i * module + rowDepth + 0.15f + aisle / 2f;
+                float zS = s.StorCenterZ - len / 2f, zN = s.StorCenterZ + len / 2f;
+                plan.Flow.Access.Add(new AccessPoint { X = ac, AisleIndex = i, ZIn = hasConv ? zS - 6f : zS - 1f, ZOut = hasConv ? zN + 6f : zN + 1f });
             }
 
             var transport = ChooseTransport(input);

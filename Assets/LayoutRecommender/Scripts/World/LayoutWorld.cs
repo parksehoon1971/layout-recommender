@@ -10,34 +10,44 @@ namespace LayoutRecommender.World
     public class EquipmentInstance : MonoBehaviour
     {
         public PlacedItem Item;
+        public Transform Lift;   // 스태커크레인 승강대 (없으면 null)
+
         readonly List<Renderer> _renderers = new List<Renderer>();
-        readonly List<Color> _baseColors = new List<Color>();
+        readonly List<Material[]> _baseMats = new List<Material[]>();
+        Material[][] _highlightMats;
 
         public void CacheRenderers()
         {
             _renderers.Clear();
-            _baseColors.Clear();
+            _baseMats.Clear();
             foreach (var r in GetComponentsInChildren<Renderer>())
             {
                 _renderers.Add(r);
-                _baseColors.Add(r.sharedMaterial != null ? r.sharedMaterial.color : Color.white);
+                _baseMats.Add(r.sharedMaterials);
             }
+            _highlightMats = null;
         }
 
         public void SetHighlight(bool on)
         {
-            for (int i = 0; i < _renderers.Count; i++)
+            if (on && _highlightMats == null)
             {
-                if (_renderers[i] == null) continue;
-                _renderers[i].sharedMaterial = LayoutWorld.MaterialFor(on ? Color.Lerp(_baseColors[i], Color.white, 0.55f) : _baseColors[i]);
+                _highlightMats = new Material[_baseMats.Count][];
+                for (int i = 0; i < _baseMats.Count; i++)
+                {
+                    var src = _baseMats[i];
+                    var dst = new Material[src.Length];
+                    for (int k = 0; k < src.Length; k++)
+                        dst[k] = LayoutWorld.MaterialFor(Color.Lerp(src[k] != null ? src[k].color : Color.white, new Color(0.4f, 1f, 0.9f), 0.45f));
+                    _highlightMats[i] = dst;
+                }
             }
+            for (int i = 0; i < _renderers.Count; i++)
+                if (_renderers[i] != null) _renderers[i].sharedMaterials = on ? _highlightMats[i] : _baseMats[i];
         }
 
-        /// <summary>떨어지듯 나타나는 효과</summary>
-        public void PlayDrop(float duration)
-        {
-            StartCoroutine(Drop(duration));
-        }
+        /// <summary>위에서 떨어지듯 나타나는 효과</summary>
+        public void PlayDrop(float duration) => StartCoroutine(Drop(duration));
 
         IEnumerator Drop(float duration)
         {
@@ -48,8 +58,8 @@ namespace LayoutRecommender.World
             {
                 t += Time.deltaTime;
                 float k = Mathf.Clamp01(t / duration);
-                float e = 1f - Mathf.Pow(1f - k, 3f);                       // ease-out
-                transform.localScale = Vector3.Lerp(end * 0.2f, end, e);
+                float e = 1f - Mathf.Pow(1f - k, 3f);
+                transform.localScale = Vector3.Lerp(end * 0.3f, end, e);
                 transform.position = endPos + Vector3.up * (1f - e) * 6f;
                 yield return null;
             }
@@ -58,17 +68,24 @@ namespace LayoutRecommender.World
         }
     }
 
-    /// <summary>건물, 구역, 도크, 설비를 3D로 만든다. 모양은 단순한 박스/캡슐.</summary>
+    /// <summary>건물, 구역, 도크, 바닥 경로선, 설비를 3D로 만든다.</summary>
     public class LayoutWorld : MonoBehaviour
     {
+        public static readonly Color InboundColor = new Color(0.20f, 0.62f, 1.00f);
+        public static readonly Color OutboundColor = new Color(1.00f, 0.58f, 0.15f);
+
         static readonly Dictionary<Color, Material> Materials = new Dictionary<Color, Material>();
         static Material _baseMaterial;
 
         Transform _envRoot;
         Transform _equipRoot;
 
+        /// <summary>시뮬레이션 화물처럼 실행 중에 생기는 오브젝트를 두는 곳 (Clear 때 같이 지워진다)</summary>
+        public Transform DynamicRoot { get; private set; }
+
         public static Material MaterialFor(Color c)
         {
+            c.a = 1f;
             if (_baseMaterial == null)
             {
                 var tmp = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -87,10 +104,13 @@ namespace LayoutRecommender.World
         {
             if (_envRoot != null) Destroy(_envRoot.gameObject);
             if (_equipRoot != null) Destroy(_equipRoot.gameObject);
+            if (DynamicRoot != null) Destroy(DynamicRoot.gameObject);
             _envRoot = new GameObject("Environment").transform;
             _envRoot.SetParent(transform, false);
             _equipRoot = new GameObject("Equipment").transform;
             _equipRoot.SetParent(transform, false);
+            DynamicRoot = new GameObject("Dynamic").transform;
+            DynamicRoot.SetParent(transform, false);
         }
 
         void OnDestroy()
@@ -99,123 +119,115 @@ namespace LayoutRecommender.World
             Materials.Clear();
         }
 
-        // ---------- 건물, 구역, 도크 ----------
+        // ---------- 건물, 구역, 도크, 경로 ----------
 
         public void BuildEnvironment(LayoutPlan plan, ProjectInput input)
         {
             Clear();
+            ModelFactory.Unit = input.cargo.unitType;
+            ModelFactory.CargoDims = new Vector3(input.cargo.widthMm, input.cargo.heightMm, input.cargo.lengthMm) / 1000f;
+
             float W = Mathf.Max(20f, input.building.widthM);
             float D = Mathf.Max(20f, input.building.depthM);
 
-            Box(_envRoot, "Floor", new Vector3(0, -0.05f, 0), new Vector3(W, 0.1f, D), new Color(0.28f, 0.30f, 0.33f), false);
+            var mb = new MeshBuilder();
+            mb.Box(new Vector3(0, -0.05f, 0), new Vector3(W, 0.1f, D), new Color(0.30f, 0.32f, 0.35f));
+            // 바깥 마당 (트럭이 서는 곳)
+            mb.Box(new Vector3(0, -0.12f, -D / 2f - 12f), new Vector3(W + 20f, 0.1f, 24f), new Color(0.20f, 0.21f, 0.23f));
+            mb.Box(new Vector3(0, -0.12f, D / 2f + 12f), new Vector3(W + 20f, 0.1f, 24f), new Color(0.20f, 0.21f, 0.23f));
 
-            // 낮은 벽으로 외곽 표시
-            var wall = new Color(0.55f, 0.58f, 0.62f);
-            Box(_envRoot, "Wall_W", new Vector3(-W / 2f - 0.15f, 0.6f, 0), new Vector3(0.3f, 1.2f, D), wall, false);
-            Box(_envRoot, "Wall_E", new Vector3(W / 2f + 0.15f, 0.6f, 0), new Vector3(0.3f, 1.2f, D), wall, false);
-            Box(_envRoot, "Wall_S", new Vector3(0, 0.6f, -D / 2f - 0.15f), new Vector3(W + 0.6f, 1.2f, 0.3f), wall, false);
-            Box(_envRoot, "Wall_N", new Vector3(0, 0.6f, D / 2f + 0.15f), new Vector3(W + 0.6f, 1.2f, 0.3f), wall, false);
+            // 낮은 벽으로 외곽 표시 (도크 쪽은 기둥만)
+            var wall = new Color(0.58f, 0.61f, 0.65f);
+            mb.Box(new Vector3(-W / 2f - 0.15f, 1.0f, 0), new Vector3(0.3f, 2.0f, D), wall);
+            mb.Box(new Vector3(W / 2f + 0.15f, 1.0f, 0), new Vector3(0.3f, 2.0f, D), wall);
+            for (float x = -W / 2f; x <= W / 2f + 0.01f; x += 10f)
+            {
+                mb.Box(new Vector3(x, 2.0f, -D / 2f), new Vector3(0.4f, 4.0f, 0.4f), wall);
+                mb.Box(new Vector3(x, 2.0f, D / 2f), new Vector3(0.4f, 4.0f, 0.4f), wall);
+            }
+            mb.Build("Building", _envRoot);
 
             if (plan == null) return;
+
+            var zones = new MeshBuilder();
             foreach (var z in plan.Zones)
             {
                 var a = z.Area;
-                Box(_envRoot, "Zone_" + z.Name, new Vector3(a.center.x, 0.01f, a.center.y), new Vector3(a.width, 0.02f, a.height), z.Color, false);
+                zones.Box(new Vector3(a.center.x, 0.01f, a.center.y), new Vector3(a.width, 0.02f, a.height), z.Color);
+                // 구역 경계선 (노란 바닥 라인)
+                var line = new Color(0.95f, 0.85f, 0.2f);
+                zones.Box(new Vector3(a.center.x, 0.025f, a.yMin + 0.05f), new Vector3(a.width, 0.01f, 0.1f), line);
+                zones.Box(new Vector3(a.center.x, 0.025f, a.yMin + a.height - 0.05f), new Vector3(a.width, 0.01f, 0.1f), line);
             }
+            zones.Build("Zones", _envRoot);
+
+            var docks = new MeshBuilder();
             foreach (var d in plan.Docks)
+                ModelFactory.Dock(docks, d.Center, d.Width, d.Inbound);
+            docks.Build("Docks", _envRoot);
+
+            BuildFlowPaths(plan.Flow);
+        }
+
+        /// <summary>입고(파랑)/출고(주황) 이동 경로를 바닥에 선과 화살표로 그린다.</summary>
+        void BuildFlowPaths(FlowNetwork f)
+        {
+            if (f == null || f.Access.Count == 0) return;
+            var mb = new MeshBuilder();
+            float y = 0f;
+
+            // 입고: 도크 → 입고 통로 → 보관 접근 지점
+            float minX = float.MaxValue, maxX = float.MinValue;
+            foreach (var x in f.InDockX) { minX = Mathf.Min(minX, x); maxX = Mathf.Max(maxX, x); }
+            foreach (var a in f.Access) { minX = Mathf.Min(minX, a.X); maxX = Mathf.Max(maxX, a.X); }
+            foreach (var x in f.InDockX)
+                ModelFactory.FloorPath(mb, new Vector3(x, y, f.InDockQueueZ - 1f), new Vector3(x, y, f.CorridorInZ), InboundColor, true);
+            ModelFactory.FloorPath(mb, new Vector3(minX, y, f.CorridorInZ), new Vector3(maxX, y, f.CorridorInZ), InboundColor, false);
+            foreach (var a in f.Access)
             {
-                var c = d.Inbound ? new Color(0.30f, 0.60f, 0.95f) : new Color(0.95f, 0.65f, 0.25f);
-                float zOff = d.Inbound ? -0.2f : 0.2f;
-                Box(_envRoot, d.Inbound ? "InDock" : "OutDock", new Vector3(d.Center.x, 1.8f, d.Center.z + zOff), new Vector3(d.Width, 3.6f, 0.4f), c, false);
+                float zEnd = a.IntoAisle ? (a.SlotZMin + a.SlotZMax) / 2f : a.ZIn;
+                ModelFactory.FloorPath(mb, new Vector3(a.X, y, f.CorridorInZ), new Vector3(a.X, y, zEnd), InboundColor, true);
             }
+
+            // 출고: 보관 접근 지점 → 출고 통로 → 도크
+            minX = float.MaxValue; maxX = float.MinValue;
+            foreach (var x in f.OutDockX) { minX = Mathf.Min(minX, x); maxX = Mathf.Max(maxX, x); }
+            foreach (var a in f.Access) { minX = Mathf.Min(minX, a.X); maxX = Mathf.Max(maxX, a.X); }
+            foreach (var a in f.Access)
+            {
+                float zStart = a.IntoAisle ? (a.SlotZMin + a.SlotZMax) / 2f : a.ZOut;
+                ModelFactory.FloorPath(mb, new Vector3(a.X + (a.IntoAisle ? 0.35f : 0f), y, zStart), new Vector3(a.X + (a.IntoAisle ? 0.35f : 0f), y, f.CorridorOutZ), OutboundColor, true);
+            }
+            ModelFactory.FloorPath(mb, new Vector3(minX, y, f.CorridorOutZ), new Vector3(maxX, y, f.CorridorOutZ), OutboundColor, false);
+            foreach (var x in f.OutDockX)
+                ModelFactory.FloorPath(mb, new Vector3(x, y, f.CorridorOutZ), new Vector3(x, y, f.OutDockQueueZ + 1f), OutboundColor, true);
+
+            mb.Build("FlowPaths", _envRoot);
         }
 
         // ---------- 설비 ----------
 
         public EquipmentInstance Spawn(PlacedItem item)
         {
-            var def = EquipmentCatalog.Get(item.Type);
-            var root = new GameObject(item.Label);
-            root.transform.SetParent(_equipRoot, false);
+            var root = ModelFactory.Build(item, _equipRoot);
             root.transform.position = item.Center;
-            var s = item.Size;
 
-            switch (item.Shape)
+            if (item.Shape == ItemShape.Mast && item.RailLength > 0f)
             {
-                case ItemShape.RackRow:
-                    BuildRack(root.transform, s, item.Type == EquipmentType.SelectiveRack ? def.Color : Color.Lerp(def.Color, new Color(0.7f, 0.72f, 0.75f), 0.55f));
-                    break;
-                case ItemShape.ShuttleBlock:
-                    BuildRack(root.transform, s, def.Color);
-                    break;
-                case ItemShape.Mast:
-                    Box(root.transform, "Mast", new Vector3(0, s.y / 2f, 0), new Vector3(s.x * 0.5f, s.y, s.z * 0.4f), def.Color, true);
-                    Box(root.transform, "Carriage", new Vector3(0, s.y * 0.35f, 0), new Vector3(s.x, 1.2f, s.z), Color.Lerp(def.Color, Color.white, 0.3f), true);
-                    Box(root.transform, "TopRail", new Vector3(0, s.y, 0), new Vector3(s.x * 0.6f, 0.3f, s.z), def.Color * 0.8f, true);
-                    break;
-                case ItemShape.Conveyor:
-                    Box(root.transform, "Bed", new Vector3(0, s.y - 0.08f, 0), new Vector3(s.x, 0.16f, s.z), def.Color, true);
-                    Box(root.transform, "Frame", new Vector3(0, (s.y - 0.16f) / 2f, 0), new Vector3(s.x * 0.85f, s.y - 0.16f, s.z * 0.95f), def.Color * 0.6f, true);
-                    break;
-                case ItemShape.Vehicle:
-                    Box(root.transform, "Body", new Vector3(0, Mathf.Min(s.y, 0.9f) / 2f, 0), new Vector3(s.x, Mathf.Min(s.y, 0.9f), s.z), def.Color, true);
-                    if (item.Type == EquipmentType.Forklift)
-                        Box(root.transform, "Mast", new Vector3(0, s.y / 2f, s.z / 2f + 0.05f), new Vector3(s.x * 0.8f, s.y, 0.12f), new Color(0.2f, 0.2f, 0.2f), true);
-                    break;
-                case ItemShape.Person:
-                    var cap = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-                    cap.name = "Body";
-                    cap.transform.SetParent(root.transform, false);
-                    cap.transform.localPosition = new Vector3(0, s.y / 2f, 0);
-                    cap.transform.localScale = new Vector3(s.x, s.y / 2f, s.z);
-                    cap.GetComponent<Renderer>().sharedMaterial = MaterialFor(def.Color);
-                    break;
+                // 크레인 주행 레일(바닥)과 상부 가이드 레일: 움직이지 않는 구조물
+                var rails = new MeshBuilder();
+                float H = item.Size.y;
+                rails.Box(new Vector3(0, 0.06f, 0), new Vector3(0.15f, 0.12f, item.RailLength + 2f), new Color(0.45f, 0.47f, 0.5f));
+                rails.Box(new Vector3(0, H + 0.1f, 0), new Vector3(0.2f, 0.15f, item.RailLength + 2f), new Color(0.45f, 0.47f, 0.5f));
+                var r = rails.Build("Rail " + item.Label, _equipRoot);
+                r.transform.position = new Vector3(item.Center.x, 0, item.RailCenterZ);
             }
 
             var inst = root.AddComponent<EquipmentInstance>();
             inst.Item = item;
+            inst.Lift = root.transform.Find("Lift");
             inst.CacheRenderers();
             return inst;
-        }
-
-        /// <summary>랙: 기둥과 단마다 빔을 그려 선반처럼 보이게 한다. 칸이 많으면 단순 박스로.</summary>
-        void BuildRack(Transform parent, Vector3 s, Color color)
-        {
-            // 클릭용 바운딩 (보이지 않음)
-            var hit = new GameObject("Hitbox");
-            hit.transform.SetParent(parent, false);
-            hit.transform.localPosition = new Vector3(0, s.y / 2f, 0);
-            var col = hit.AddComponent<BoxCollider>();
-            col.size = s;
-
-            var frame = color * 0.75f;
-            frame.a = 1f;
-            int uprights = Mathf.Clamp(Mathf.RoundToInt(s.z / 2.7f), 2, 40);
-            for (int i = 0; i <= uprights; i++)
-            {
-                float z = -s.z / 2f + s.z * i / uprights;
-                Box(parent, "Upright", new Vector3(0, s.y / 2f, z), new Vector3(s.x, s.y, 0.12f), frame, false);
-            }
-            int beams = Mathf.Clamp(Mathf.RoundToInt(s.y / 1.5f), 1, 16);
-            for (int b = 1; b <= beams; b++)
-            {
-                float y = s.y * b / beams;
-                Box(parent, "Beam", new Vector3(0, y - 0.06f, 0), new Vector3(s.x, 0.12f, s.z), color, false);
-            }
-            // 적재물 느낌을 주는 반투명하지 않은 내부 블록
-            Box(parent, "Load", new Vector3(0, s.y * 0.45f, 0), new Vector3(s.x * 0.8f, s.y * 0.85f, s.z * 0.98f), Color.Lerp(color, new Color(0.6f, 0.5f, 0.35f), 0.6f), false);
-        }
-
-        static GameObject Box(Transform parent, string name, Vector3 localPos, Vector3 size, Color color, bool keepCollider)
-        {
-            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            go.name = name;
-            go.transform.SetParent(parent, false);
-            go.transform.localPosition = localPos;
-            go.transform.localScale = size;
-            go.GetComponent<Renderer>().sharedMaterial = MaterialFor(color);
-            if (!keepCollider) Destroy(go.GetComponent<Collider>());
-            return go;
         }
     }
 }

@@ -6,6 +6,7 @@ using System.Text;
 using LayoutRecommender.Core;
 using LayoutRecommender.Data;
 using LayoutRecommender.Planning;
+using LayoutRecommender.Simulation;
 using LayoutRecommender.UI;
 using LayoutRecommender.World;
 using UnityEngine;
@@ -21,7 +22,8 @@ namespace LayoutRecommender.Screens
     public class LayoutScreen : ScreenBase
     {
         const float TopH = 72f, BottomH = 140f, LeftW = 320f, RightW = 400f;
-        static readonly float[] Speeds = { 1f, 2f, 4f, 8f, 16f };
+        static readonly float[] Speeds = { 1f, 2f, 4f, 8f, 16f, 32f, 60f };
+        const int DefaultSpeedIndex = 3; // ×8: 피크 시간 흐름을 금방 볼 수 있게
 
         ProjectInput In => App.CurrentInput;
         RectTransform _root;
@@ -47,12 +49,18 @@ namespace LayoutRecommender.Screens
         // 시간/플레이
         float _simTime;
         bool _playing;
-        int _speedIndex;
+        int _speedIndex = DefaultSpeedIndex;
+
+        // 시뮬레이션
+        FlowSimulator _sim;
+        float _statsTimer;
+        enum PanelMode { Plan, Item, Def, Input }
+        PanelMode _panelMode = PanelMode.Plan;
         Text _timeText;
         Button _speedBtn;
 
         // 좌측 팔레트
-        class PaletteEntry { public RectTransform Icon; public Text Name; public EquipmentDef Def; public int Count; }
+        class PaletteEntry { public RectTransform Icon; public RawImage Picture; public Text Code; public Text Name; public EquipmentDef Def; public int Count; }
         readonly Dictionary<EquipmentType, PaletteEntry> _palette = new Dictionary<EquipmentType, PaletteEntry>();
 
         // 우측
@@ -101,6 +109,9 @@ namespace LayoutRecommender.Screens
                 _plans = new List<LayoutPlan>();
             }
 
+            // 배치안 전환 때 StopAllCoroutines에 끊기지 않도록 앱 쪽에서 돌린다
+            IconRenderer.Ensure(App, Theme.PanelLight, () => { if (this != null) ApplyIcons(); });
+
             BuildPlanButtons();
             if (_plans.Count == 0)
             {
@@ -124,8 +135,23 @@ namespace LayoutRecommender.Screens
         {
             if (_playing)
             {
-                _simTime += Time.deltaTime * Speeds[_speedIndex];
+                float dt = Time.deltaTime * Speeds[_speedIndex];
+                _simTime += dt;
                 UpdateTimeText();
+                if (_sim != null)
+                {
+                    // 배속이 커도 움직임이 튀지 않게 잘게 나눠 진행
+                    int steps = Mathf.Clamp(Mathf.CeilToInt(dt / 0.5f), 1, 200);
+                    for (int i = 0; i < steps; i++) _sim.Tick(dt / steps);
+                }
+            }
+
+            _statsTimer -= Time.deltaTime;
+            if (_sim != null && _statsTimer <= 0f)
+            {
+                _statsTimer = 0.3f;
+                SetProgress(1f, _sim.Summary());
+                if (_panelMode == PanelMode.Plan) ShowPlanDetails(keepScroll: true);
             }
 
             if (InputBridge.LeftPressed && !InputBridge.PointerOverUI)
@@ -144,6 +170,7 @@ namespace LayoutRecommender.Screens
             _placing = null;
             if (_ghostLayer != null) UIFactory.ClearChildren(_ghostLayer);
             _planIndex = index;
+            _sim = null; // 화물 등 실행 중 오브젝트는 BuildEnvironment에서 함께 지워진다
             _playing = false;
             _simTime = 0f;
             UpdateTimeText();
@@ -189,7 +216,7 @@ namespace LayoutRecommender.Screens
                     break;
                 }
 
-                float speed = Speeds[_speedIndex];
+                const float speed = 1f; // 배치 애니메이션 속도 (시뮬레이션 배속과 별개)
                 float interval = Mathf.Clamp(12f / Mathf.Max(1, total), 0.04f, 0.4f) / speed;
                 float flight = Mathf.Clamp(interval * 4f, 0.25f, 0.7f) / Mathf.Sqrt(speed);
                 StartCoroutine(Fly(items[i], flight));
@@ -221,8 +248,19 @@ namespace LayoutRecommender.Screens
             ghost.sizeDelta = new Vector2(56, 40);
             ghost.anchorMin = ghost.anchorMax = new Vector2(0.5f, 0.5f);
             ghost.GetComponent<Image>().raycastTarget = false;
-            var gl = UIFactory.Label(ghost, entry.Def.Icon, 18, Color.black, TextAnchor.MiddleCenter, FontStyle.Bold);
-            UIFactory.Stretch(gl.rectTransform);
+            ghost.sizeDelta = new Vector2(80, 60);
+            if (IconRenderer.TryGet(entry.Def.Type, out var tex))
+            {
+                var pic = UIFactory.Rect(ghost, "Picture").gameObject.AddComponent<RawImage>();
+                pic.texture = tex;
+                pic.raycastTarget = false;
+                UIFactory.Stretch(pic.rectTransform, 2, 2, 2, 2);
+            }
+            else
+            {
+                var gl = UIFactory.Label(ghost, entry.Def.Icon, 18, Color.black, TextAnchor.MiddleCenter, FontStyle.Bold);
+                UIFactory.Stretch(gl.rectTransform);
+            }
 
             Vector3 start = entry.Icon.position;     // 오버레이 캔버스라 화면 좌표와 같다
             Vector3 end = new Vector3(screen.x, screen.y, 0f);
@@ -272,8 +310,19 @@ namespace LayoutRecommender.Screens
             _placing = null;
             _placementDone = true;
             _skipBtn.interactable = false;
-            SetProgress(1f, $"배치 완료 · {plan.Name} · 시뮬레이션 실행 중");
-            Log($"배치 완료 · 설비 {_spawned.Count}개 · 시뮬레이션 시작 (설비 동작은 3단계에서 구현)");
+            SetProgress(1f, $"배치 완료 · {plan.Name} · 시뮬레이션 시작");
+            try
+            {
+                _sim = new FlowSimulator(plan, In, _world, _spawned);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+                _sim = null;
+            }
+            if (_sim != null && !_sim.HasMovers)
+                Log("운반 설비가 없어 화물 이동은 시뮬레이션하지 않습니다.");
+            Log($"배치 완료 · 설비 {_spawned.Count}개 · 시뮬레이션 자동 시작 (×{Speeds[_speedIndex]} 배속, 피크 시간 기준)");
             _playing = true;
         }
 
@@ -332,7 +381,7 @@ namespace LayoutRecommender.Screens
             UIFactory.Size(UIFactory.CreateButton(bar, "▶", () => { if (_placementDone) _playing = true; }, Theme.AccentDim, 24), width: 60);
             UIFactory.Size(UIFactory.CreateButton(bar, "∥", () => _playing = false, Theme.PanelLight, 20), width: 60);
             UIFactory.Size(UIFactory.CreateButton(bar, "■", () => { _playing = false; _simTime = 0f; UpdateTimeText(); }, Theme.PanelLight, 22), width: 60);
-            _speedBtn = UIFactory.CreateButton(bar, "×1", () =>
+            _speedBtn = UIFactory.CreateButton(bar, "×" + Speeds[_speedIndex], () =>
             {
                 _speedIndex = (_speedIndex + 1) % Speeds.Length;
                 UIFactory.SetButtonLabel(_speedBtn, "×" + Speeds[_speedIndex]);
@@ -388,15 +437,32 @@ namespace LayoutRecommender.Screens
             UIFactory.HLayout(row.gameObject, 10);
 
             var icon = UIFactory.Panel(row, "Icon", allowed ? def.Color : new Color(0.3f, 0.3f, 0.3f));
-            UIFactory.Size(icon, width: 56);
+            UIFactory.Size(icon, width: 64);
             icon.GetComponent<Image>().raycastTarget = false;
             var code = UIFactory.Label(icon, def.Icon, 18, Color.black, TextAnchor.MiddleCenter, FontStyle.Bold);
             UIFactory.Stretch(code.rectTransform);
+            var pic = UIFactory.Rect(icon, "Picture").gameObject.AddComponent<RawImage>();
+            pic.raycastTarget = false;
+            pic.enabled = false;
+            UIFactory.Stretch(pic.rectTransform, 2, 2, 2, 2);
 
             var name = UIFactory.Label(row, allowed ? def.NameKo : def.NameKo + " (제외)", 19, allowed ? Theme.Text : Theme.TextDim);
             UIFactory.Size(name, flexWidth: 1);
 
-            _palette[def.Type] = new PaletteEntry { Icon = icon, Name = name, Def = def };
+            _palette[def.Type] = new PaletteEntry { Icon = icon, Picture = pic, Code = code, Name = name, Def = def };
+        }
+
+        /// <summary>3D 모델로 찍은 그림 아이콘을 팔레트에 붙인다.</summary>
+        void ApplyIcons()
+        {
+            foreach (var e in _palette.Values)
+            {
+                if (e.Picture == null || !IconRenderer.TryGet(e.Def.Type, out var tex)) continue;
+                e.Picture.texture = tex;
+                e.Picture.enabled = true;
+                e.Picture.color = In.IsAllowed(e.Def) ? Color.white : new Color(0.45f, 0.45f, 0.45f, 1f);
+                e.Code.enabled = false;
+            }
         }
 
         void ResetPaletteCounts()
@@ -483,13 +549,16 @@ namespace LayoutRecommender.Screens
             }
         }
 
-        void ShowPlanDetails()
+        void ShowPlanDetails(bool keepScroll = false)
         {
             var p = Plan;
             if (p == null) return;
+            _panelMode = PanelMode.Plan;
             _propTitle.text = p.Name + (p.Recommended ? "  (추천)" : "");
-            _propBody.text = p.ToDetailText();
-            _propScroll.verticalNormalizedPosition = 1f;
+            string text = p.ToDetailText();
+            if (_sim != null) text = "[시뮬레이션]\n" + _sim.Report() + "\n[배치안]\n" + text;
+            _propBody.text = text;
+            if (!keepScroll) _propScroll.verticalNormalizedPosition = 1f;
         }
 
         void ShowItemDetails(PlacedItem item)
@@ -503,6 +572,7 @@ namespace LayoutRecommender.Screens
             sb.AppendLine(item.Detail);
             sb.AppendLine();
             sb.Append("빈 곳을 클릭하면 배치안 정보로 돌아갑니다.");
+            _panelMode = PanelMode.Item;
             _propTitle.text = item.Label;
             _propBody.text = sb.ToString();
             _propScroll.verticalNormalizedPosition = 1f;
@@ -525,6 +595,7 @@ namespace LayoutRecommender.Screens
             if (Plan != null) sb.AppendLine($"이 배치안 사용 수:  {Plan.CountOf(def.Type)}");
             sb.AppendLine();
             sb.Append(def.Description);
+            _panelMode = PanelMode.Def;
             _propTitle.text = def.NameKo;
             _propBody.text = sb.ToString();
             _propScroll.verticalNormalizedPosition = 1f;
@@ -532,6 +603,7 @@ namespace LayoutRecommender.Screens
 
         void ShowInputProperties()
         {
+            _panelMode = PanelMode.Input;
             _propTitle.text = "프로젝트 입력값";
             _propBody.text = In.ToSummary().Replace(",  ", "\n    ").Replace("[", "\n[").TrimStart('\n');
             _propScroll.verticalNormalizedPosition = 1f;
@@ -566,7 +638,7 @@ namespace LayoutRecommender.Screens
             _logText = UIFactory.Label(bar, "", 17, Theme.TextDim, TextAnchor.UpperLeft);
             UIFactory.Size(_logText, flexHeight: 1);
 
-            var help = UIFactory.Label(root, "오른쪽 드래그: 회전 · 휠: 확대/축소 · 가운데(또는 Shift+오른쪽) 드래그: 이동 · 클릭: 설비 선택", 16, Theme.TextDim, TextAnchor.LowerCenter);
+            var help = UIFactory.Label(root, "파란 선: 입고 경로 · 주황 선: 출고 경로    |    오른쪽 드래그: 회전 · 휠: 확대/축소 · 가운데(Shift+오른쪽) 드래그: 이동 · 클릭: 설비 선택", 16, Theme.TextDim, TextAnchor.LowerCenter);
             UIFactory.Anchor(help.rectTransform, new Vector2(0, 0), new Vector2(1, 0), new Vector2(LeftW + 10, BottomH + 6), new Vector2(-RightW - 10, BottomH + 30));
         }
 

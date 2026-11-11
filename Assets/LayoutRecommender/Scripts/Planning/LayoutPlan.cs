@@ -25,6 +25,46 @@ namespace LayoutRecommender.Planning
         public Vector3 Size;     // 폭(x) × 높이(y) × 길이(z)
         public string Label;     // 예: "랙 열 3"
         public string Detail;    // 속성창에 보일 설명
+
+        // 랙/블록 그리기용
+        public int Levels;           // 단 수
+        public float LevelPitch;     // 단 간격 (m)
+        public float SlotWidth;      // 칸 폭 (m, 길이 방향)
+        public LoadUnitType Unit;    // 적재 단위
+        public float Fill = 0.7f;    // 적재율 (표시용)
+
+        // 시뮬레이션용
+        public bool IsMover;         // 화물을 나르는 운반 설비/작업자
+        public int AisleIndex = -1;  // 스태커크레인이 맡은 통로
+        public float RailCenterZ;    // 크레인 레일 중심 z
+        public float RailLength;     // 크레인 레일 길이
+    }
+
+    /// <summary>운반 설비가 화물을 주고받는 보관 쪽 지점</summary>
+    public class AccessPoint
+    {
+        public float X;              // 접근 통로 x
+        public float ZIn;            // 입고 화물을 내려놓는 z
+        public float ZOut;           // 출고 화물을 집는 z
+        public float SlotZMin, SlotZMax; // 통로 안으로 들어가는 경우 랜덤 위치 범위 (선택식 랙)
+        public bool IntoAisle;       // true: 통로 안 임의 위치까지 들어감
+        public int AisleIndex = -1;  // 크레인 통로 번호 (자동창고)
+    }
+
+    /// <summary>
+    /// 이동 경로망: 입고/출고 횡단 통로(가로선)와 도크·보관 접근 지점을 잇는 세로선.
+    /// 바닥 경로 표시와 시뮬레이션 경로 계산에 같이 쓴다.
+    /// </summary>
+    public class FlowNetwork
+    {
+        public float CorridorInZ;    // 입고 횡단 통로
+        public float CorridorOutZ;   // 출고 횡단 통로
+        public float InDockQueueZ;   // 입고 화물이 내려지는 위치 (도크 앞)
+        public float OutDockQueueZ;  // 출고 화물을 모아두는 위치 (도크 앞)
+        public readonly List<float> InDockX = new List<float>();
+        public readonly List<float> OutDockX = new List<float>();
+        public readonly List<AccessPoint> Access = new List<AccessPoint>();
+        public float HandlingSeconds = 20f; // 싣기/내리기 시간
     }
 
     /// <summary>바닥에 칠할 구역 (입고 도크, 입고 대기, 보관, 출고 대기, 출고 도크)</summary>
@@ -55,6 +95,7 @@ namespace LayoutRecommender.Planning
         public readonly List<DockDoor> Docks = new List<DockDoor>();
         public readonly Dictionary<EquipmentType, int> Counts = new Dictionary<EquipmentType, int>();
         public readonly List<string> Notes = new List<string>();
+        public FlowNetwork Flow = new FlowNetwork();
 
         public int Levels;
         public int PhysicalPositions;              // 물리적 보관 위치 수
