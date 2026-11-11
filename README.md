@@ -9,8 +9,13 @@
    씬에 따로 배치할 것은 없습니다. 실행하면 `AppManager`가 자동으로 생성되고, 화면은 모두 코드로 만들어집니다.
 4. 이후 업데이트는 `git pull`로 받습니다. Unity가 열려 있어도 자동으로 다시 컴파일됩니다.
 
+처음 열 때 자동 설정 (`Assets/LayoutRecommender/Editor/ProjectSetup.cs`)
+- URP와 Input System 패키지를 에디터 버전에 맞게 설치합니다.
+- URP 에셋을 만들어 기본 렌더 파이프라인으로 지정합니다. ("Built-in Render Pipeline 지원 중단" 경고가 사라집니다.)
+- Active Input Handling을 새 Input System으로 바꾸고 에디터 재시작을 묻습니다. ("Input Manager" 경고가 사라집니다.)
+- 다시 실행하려면 메뉴 **Tools → Layout Recommender → 프로젝트 설정 다시 실행**을 누릅니다.
+
 참고
-- Input System(새 입력)과 기존 Input Manager를 모두 지원합니다. 프로젝트 설정에 맞는 UI 입력 모듈이 자동으로 붙습니다.
 - 한글은 OS 폰트(맑은 고딕 등)를 사용합니다. 글자가 □로 보이면 알려주세요. 폰트 에셋을 넣는 방식으로 바꾸겠습니다.
 - 다른 씬에서 자동 실행을 끄려면 그 씬에 `DisableLayoutRecommender`라는 이름의 빈 오브젝트를 두면 됩니다.
 

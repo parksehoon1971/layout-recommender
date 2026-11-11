@@ -31,3 +31,7 @@ crashlytics-build.properties
 
 # 패키지 잠금 파일은 각 PC에서 생성
 /Packages/packages-lock.json
+
+# 에디터 설정 스크립트가 PC마다 자동 생성하는 URP 에셋
+/Assets/LayoutRecommender/Settings/
+/Assets/LayoutRecommender/Settings.meta
