@@ -276,6 +276,37 @@ namespace LayoutRecommender.UI
             return row;
         }
 
+        /// <summary>세로 스크롤되는 긴 글 상자. 반환값은 내용을 넣을 Text.</summary>
+        public static Text CreateScrollText(Transform parent, int fontSize, out ScrollRect scroll)
+        {
+            var root = Rect(parent, "ScrollText");
+            var hitArea = root.gameObject.AddComponent<Image>();
+            hitArea.color = new Color(0, 0, 0, 0); // 휠 입력을 받기 위한 투명 영역
+            scroll = root.gameObject.AddComponent<ScrollRect>();
+            scroll.horizontal = false;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 30f;
+
+            var viewport = Rect(root, "Viewport");
+            Stretch(viewport);
+            viewport.gameObject.AddComponent<RectMask2D>();
+
+            var content = Rect(viewport, "Content");
+            content.anchorMin = new Vector2(0, 1);
+            content.anchorMax = new Vector2(1, 1);
+            content.pivot = new Vector2(0.5f, 1f);
+            content.anchoredPosition = Vector2.zero;
+            content.sizeDelta = Vector2.zero;
+            var fitter = content.gameObject.AddComponent<ContentSizeFitter>();
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            VLayout(content.gameObject, 0, new RectOffset(0, 8, 0, 8));
+
+            var text = Label(content, "", fontSize, Theme.Text, TextAnchor.UpperLeft);
+            scroll.viewport = viewport;
+            scroll.content = content;
+            return text;
+        }
+
         /// <summary>켜고 끄는 버튼 (■ 켜짐 / □ 꺼짐)</summary>
         public static Button CreateToggle(Transform parent, string label, bool initial, Action<bool> onChanged,
             bool interactable = true, int fontSize = 20)
