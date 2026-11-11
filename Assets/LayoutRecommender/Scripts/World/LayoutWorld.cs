@@ -11,6 +11,35 @@ namespace LayoutRecommender.World
     {
         public PlacedItem Item { get; set; }   // 실행 중에만 쓰는 값 (직렬화하지 않음)
         public Transform Lift;   // 스태커크레인 승강대 (없으면 null)
+        GameObject _loads;       // 랙/셔틀랙에 적재된 화물 (재고 수준에 따라 다시 만든다)
+        float _loadLevel = -1f;
+
+        public bool IsStorage => Item != null && (Item.Shape == ItemShape.RackRow || Item.Shape == ItemShape.ShuttleBlock);
+
+        /// <summary>재고 수준(0~1)에 맞춰 적재 화물을 보이거나 숨긴다.</summary>
+        public void SetLoads(float level, bool visible)
+        {
+            if (!IsStorage) return;
+            level = Mathf.Clamp01(level);
+            if (_loads == null || Mathf.Abs(level - _loadLevel) > 0.001f)
+            {
+                DestroyLoads();
+                _loads = ModelFactory.BuildLoads(Item, level, transform);
+                _loadLevel = level;
+            }
+            _loads.SetActive(visible);
+        }
+
+        void DestroyLoads()
+        {
+            if (_loads == null) return;
+            var mf = _loads.GetComponent<MeshFilter>();
+            if (mf != null && mf.sharedMesh != null) Destroy(mf.sharedMesh);
+            Destroy(_loads);
+            _loads = null;
+        }
+
+        void OnDestroy() => DestroyLoads();
 
         readonly List<Renderer> _renderers = new List<Renderer>();
         readonly List<Material[]> _baseMats = new List<Material[]>();
@@ -161,12 +190,71 @@ namespace LayoutRecommender.World
             }
             zones.Build("Zones", _envRoot);
 
+            BuildStorageOutlines(plan);
+
             var docks = new MeshBuilder();
             foreach (var d in plan.Docks)
                 ModelFactory.Dock(docks, d.Center, d.Width, d.Inbound);
             docks.Build("Docks", _envRoot);
 
             BuildFlowPaths(plan.Flow);
+        }
+
+        /// <summary>
+        /// 보관 공간을 바닥에 테두리로 표시한다: 보관 구역 외곽(굵은 선) + 랙/블록 자리 외곽 + 칸(베이/레인) 구분선.
+        /// 설비가 놓이기 전부터 보여서 어디에 무엇이 들어갈지 알 수 있다.
+        /// </summary>
+        void BuildStorageOutlines(LayoutPlan plan)
+        {
+            var mb = new MeshBuilder();
+            var zoneLine = new Color(0.95f, 0.95f, 0.98f);
+            var slotLine = new Color(0.80f, 0.86f, 0.95f);
+            const float y = 0.028f;
+
+            foreach (var z in plan.Zones)
+            {
+                if (z.Name != "보관") continue;
+                Outline(mb, new Vector3(z.Area.center.x, y, z.Area.center.y), z.Area.width, z.Area.height, 0.22f, zoneLine);
+            }
+
+            foreach (var it in plan.Items)
+            {
+                if (it.Shape != ItemShape.RackRow && it.Shape != ItemShape.ShuttleBlock) continue;
+                var c = new Vector3(it.Center.x, y, it.Center.z);
+                Outline(mb, c, it.Size.x, it.Size.z, 0.1f, slotLine);
+
+                if (it.Shape == ItemShape.RackRow)
+                {
+                    // 칸(슬롯) 구분: 길이 방향으로 적재 단위 폭마다
+                    float slot = it.SlotWidth > 0 ? it.SlotWidth : 1.2f;
+                    int n = Mathf.Clamp(Mathf.FloorToInt(it.Size.z / slot), 1, 400);
+                    for (int i = 1; i < n; i++)
+                    {
+                        float zz = it.Center.z - it.Size.z / 2f + it.Size.z * i / n;
+                        mb.Box(new Vector3(c.x, y, zz), new Vector3(it.Size.x, 0.01f, 0.05f), slotLine);
+                    }
+                }
+                else
+                {
+                    // 레인 구분: 폭 방향으로 레인 폭마다
+                    float lane = it.SlotWidth > 0 ? it.SlotWidth : 1.4f;
+                    int n = Mathf.Clamp(Mathf.RoundToInt(it.Size.x / lane), 1, 200);
+                    for (int i = 1; i < n; i++)
+                    {
+                        float xx = it.Center.x - it.Size.x / 2f + it.Size.x * i / n;
+                        mb.Box(new Vector3(xx, y, c.z), new Vector3(0.05f, 0.01f, it.Size.z), slotLine);
+                    }
+                }
+            }
+            mb.Build("StorageOutlines", _envRoot);
+        }
+
+        static void Outline(MeshBuilder mb, Vector3 c, float w, float d, float t, Color col)
+        {
+            mb.Box(c + new Vector3(0, 0, -d / 2f), new Vector3(w + t, 0.012f, t), col);
+            mb.Box(c + new Vector3(0, 0, d / 2f), new Vector3(w + t, 0.012f, t), col);
+            mb.Box(c + new Vector3(-w / 2f, 0, 0), new Vector3(t, 0.012f, d + t), col);
+            mb.Box(c + new Vector3(w / 2f, 0, 0), new Vector3(t, 0.012f, d + t), col);
         }
 
         /// <summary>입고(파랑)/출고(주황) 이동 경로를 바닥에 선과 화살표로 그린다.</summary>

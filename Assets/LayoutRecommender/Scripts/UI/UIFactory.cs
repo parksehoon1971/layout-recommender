@@ -307,6 +307,38 @@ namespace LayoutRecommender.UI
             return text;
         }
 
+        /// <summary>가로 슬라이더 (0~1 기본). 핸들을 끌거나 트랙을 눌러 값을 바꾼다.</summary>
+        public static Slider CreateSlider(Transform parent, float min, float max, float value, Action<float> onChanged)
+        {
+            var root = Rect(parent, "Slider");
+            var slider = root.gameObject.AddComponent<Slider>();
+
+            var bg = Panel(root, "Background", Theme.Field);
+            Anchor(bg, new Vector2(0, 0.5f), new Vector2(1, 0.5f), new Vector2(0, -6), new Vector2(0, 6));
+
+            var fillArea = Rect(root, "Fill Area");
+            Anchor(fillArea, new Vector2(0, 0.5f), new Vector2(1, 0.5f), new Vector2(0, -6), new Vector2(0, 6));
+            var fill = Panel(fillArea, "Fill", Theme.Accent);
+            fill.anchorMin = Vector2.zero; fill.anchorMax = new Vector2(0, 1);
+            fill.offsetMin = Vector2.zero; fill.offsetMax = Vector2.zero;
+
+            var handleArea = Rect(root, "Handle Slide Area");
+            Anchor(handleArea, Vector2.zero, Vector2.one, new Vector2(10, 0), new Vector2(-10, 0));
+            var handle = Panel(handleArea, "Handle", Color.white);
+            handle.anchorMin = new Vector2(0, 0); handle.anchorMax = new Vector2(0, 1);
+            handle.sizeDelta = new Vector2(20, 0);
+
+            slider.fillRect = fill;
+            slider.handleRect = handle;
+            slider.targetGraphic = handle.GetComponent<Image>();
+            slider.direction = Slider.Direction.LeftToRight;
+            slider.minValue = min;
+            slider.maxValue = max;
+            slider.value = value;
+            if (onChanged != null) slider.onValueChanged.AddListener(v => onChanged(v));
+            return slider;
+        }
+
         /// <summary>켜고 끄는 버튼 (■ 켜짐 / □ 꺼짐)</summary>
         public static Button CreateToggle(Transform parent, string label, bool initial, Action<bool> onChanged,
             bool interactable = true, int fontSize = 20)

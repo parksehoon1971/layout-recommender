@@ -73,6 +73,14 @@ namespace LayoutRecommender.Screens
         Text _progressText;
         RectTransform _progressFill;
         Text _logText;
+
+        // 재고 수준 (0~1: 보관 위치 대비 적재 비율)
+        Slider _stockSlider;
+        Text _stockLabel;
+        float _stockLevel = 0.6f;
+        bool _stockDirty;
+        float _stockApplyTimer;
+        bool _loadsVisible;
         Button _skipBtn;
         readonly Queue<string> _logLines = new Queue<string>();
 
@@ -146,6 +154,13 @@ namespace LayoutRecommender.Screens
                 }
             }
 
+            // 슬라이더를 끄는 동안 매번 다시 만들지 않도록 잠깐 모았다가 반영
+            if (_stockDirty)
+            {
+                _stockApplyTimer -= Time.deltaTime;
+                if (_stockApplyTimer <= 0f) ApplyStockLevel();
+            }
+
             _statsTimer -= Time.deltaTime;
             if (_sim != null && _statsTimer <= 0f)
             {
@@ -170,6 +185,8 @@ namespace LayoutRecommender.Screens
             _placing = null;
             if (_ghostLayer != null) UIFactory.ClearChildren(_ghostLayer);
             _planIndex = index;
+            _loadsVisible = false;  // 배치하는 동안 랙은 비워 둔다
+            SetStockSlider(DefaultStockLevel(Plan));
             _sim = null; // 화물 등 실행 중 오브젝트는 BuildEnvironment에서 함께 지워진다
             _playing = false;
             _simTime = 0f;
@@ -311,9 +328,14 @@ namespace LayoutRecommender.Screens
             _placementDone = true;
             _skipBtn.interactable = false;
             SetProgress(1f, $"배치 완료 · {plan.Name} · 시뮬레이션 시작");
+
+            // 시뮬레이션 직전: 현재 재고 수준만큼 랙에 화물을 한 번에 채운다
+            _loadsVisible = true;
+            ApplyStockLevel();
+
             try
             {
-                _sim = new FlowSimulator(plan, In, _world, _spawned);
+                _sim = new FlowSimulator(plan, In, _world, _spawned, _stockLevel);
             }
             catch (Exception e)
             {
@@ -510,6 +532,23 @@ namespace LayoutRecommender.Screens
             _planList = UIFactory.Rect(panel, "PlanList");
             UIFactory.VLayout(_planList.gameObject, 6);
 
+            // 재고 수준 슬라이더
+            var stockRow = UIFactory.Rect(panel, "StockRow");
+            UIFactory.HLayout(stockRow.gameObject, 8);
+            UIFactory.Size(stockRow, height: 26);
+            var stockTitle = UIFactory.Label(stockRow, "재고 수준", 18, Theme.Text, TextAnchor.MiddleLeft, FontStyle.Bold);
+            UIFactory.Size(stockTitle, width: 90);
+            _stockLabel = UIFactory.Label(stockRow, "", 16, Theme.TextDim, TextAnchor.MiddleRight);
+            UIFactory.Size(_stockLabel, flexWidth: 1);
+            _stockSlider = UIFactory.CreateSlider(panel, 0f, 1f, _stockLevel, v =>
+            {
+                _stockLevel = v;
+                UpdateStockLabel();
+                _stockDirty = true;
+                _stockApplyTimer = 0.15f;
+            });
+            UIFactory.Size(_stockSlider, height: 28);
+
             _propTitle = UIFactory.Label(panel, "", 21, Theme.Accent, TextAnchor.MiddleLeft, FontStyle.Bold);
             UIFactory.Size(_propTitle, height: 32);
 
@@ -519,6 +558,43 @@ namespace LayoutRecommender.Screens
 
             var btn = UIFactory.CreateButton(panel, "프로젝트 입력값 보기", ShowInputProperties, Theme.PanelLight, 18);
             UIFactory.Size(btn, height: 40);
+        }
+
+        /// <summary>기본 재고 수준: 보관 필요량(최대 재고)의 80%를 평균 재고로 본다.</summary>
+        static float DefaultStockLevel(LayoutPlan p)
+        {
+            if (p == null || p.UsablePositions <= 0) return 0.6f;
+            return Mathf.Clamp(p.RequiredPositions * 0.8f / p.UsablePositions, 0.05f, 1f);
+        }
+
+        void SetStockSlider(float level)
+        {
+            _stockLevel = Mathf.Clamp01(level);
+            if (_stockSlider != null) _stockSlider.SetValueWithoutNotify(_stockLevel);
+            UpdateStockLabel();
+            _stockDirty = false;
+        }
+
+        void UpdateStockLabel()
+        {
+            if (_stockLabel == null) return;
+            int cap = Plan != null ? Plan.UsablePositions : 0;
+            _stockLabel.text = cap > 0
+                ? $"{_stockLevel * 100f:0}%  ·  {Mathf.RoundToInt(cap * _stockLevel):N0} / {cap:N0} 위치"
+                : $"{_stockLevel * 100f:0}%";
+        }
+
+        /// <summary>랙 화물 표시와 시뮬레이션 재고에 현재 재고 수준을 반영한다.</summary>
+        void ApplyStockLevel()
+        {
+            _stockDirty = false;
+            foreach (var inst in _spawned)
+                if (inst != null && inst.IsStorage) inst.SetLoads(_stockLevel, _loadsVisible);
+            if (_sim != null)
+            {
+                _sim.SetStockLevel(_stockLevel);
+                Log($"재고 수준 {_stockLevel * 100f:0}%로 조정");
+            }
         }
 
         readonly List<Button> _planButtons = new List<Button>();

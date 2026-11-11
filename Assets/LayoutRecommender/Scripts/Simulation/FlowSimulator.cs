@@ -81,8 +81,22 @@ namespace LayoutRecommender.Simulation
         public int OutDone { get; private set; }
         public bool HasMovers => _movers.Count > 0;
 
-        public FlowSimulator(LayoutPlan plan, ProjectInput input, LayoutWorld world, IEnumerable<EquipmentInstance> instances)
+        // 재고: 보관 위치 수(용량) 대비 현재 수량. 출고는 재고가 있을 때만 생기고 입고는 용량까지만 들어간다.
+        public int Capacity { get; private set; }
+        public int Stock { get; private set; }
+        public int StockOutSkipped { get; private set; }   // 재고가 없어 출고하지 못한 건수
+        public int FullSkipped { get; private set; }       // 보관 위치가 꽉 차 입고하지 못한 건수
+        public float StockLevel => Capacity > 0 ? (float)Stock / Capacity : 0f;
+
+        public void SetStockLevel(float level)
         {
+            Stock = Mathf.Clamp(Mathf.RoundToInt(Capacity * Mathf.Clamp01(level)), 0, Capacity);
+        }
+
+        public FlowSimulator(LayoutPlan plan, ProjectInput input, LayoutWorld world, IEnumerable<EquipmentInstance> instances, float stockLevel)
+        {
+            Capacity = Mathf.Max(1, plan.UsablePositions);
+            SetStockLevel(stockLevel);
             _plan = plan;
             _in = input;
             _world = world;
@@ -169,6 +183,8 @@ namespace LayoutRecommender.Simulation
         void CreateInbound()
         {
             if (_f.Access.Count == 0) return;
+            // 입고 예정분까지 포함해 보관 위치가 남아 있어야 받는다
+            if (Stock + WaitingInbound + InTransit(true) >= Capacity) { FullSkipped++; return; }
             var t = new SimTask { Inbound = true, Dock = _rnd.Next(_inSlots.Length), Access = RandomAccess() };
             t.SlotZ = RandomSlotZ(t.Access);
 
@@ -188,6 +204,8 @@ namespace LayoutRecommender.Simulation
         void CreateOutbound()
         {
             if (_f.Access.Count == 0) return;
+            if (Stock <= 0) { StockOutSkipped++; return; }
+            Stock--; // 출고 지시 시점에 재고를 할당
             var t = new SimTask { Inbound = false, Dock = _rnd.Next(_outSlots.Length), Access = RandomAccess() };
             t.SlotZ = t.Access.IntoAisle ? RandomSlotZ(t.Access) : t.Access.ZOut;
             _waiting.Add(t);
@@ -422,6 +440,7 @@ namespace LayoutRecommender.Simulation
             {
                 Object.Destroy(t.Cargo);
                 InDone++;
+                Stock = Mathf.Min(Capacity, Stock + 1);
                 // 자동창고: 크레인이 입고대에서 받아 랙에 넣는다
                 if (_cranes.TryGetValue(t.Access.AisleIndex, out var c))
                 {
@@ -492,6 +511,8 @@ namespace LayoutRecommender.Simulation
 
         // ---------- 지표 ----------
 
+        int InTransit(bool inbound) => _movers.Count(m => m.Task != null && m.Task.Inbound == inbound);
+
         public int WaitingInbound => _waiting.Count(t => t.Inbound);
         public int WaitingOutbound => _waiting.Count(t => !t.Inbound);
 
@@ -501,7 +522,7 @@ namespace LayoutRecommender.Simulation
         public string Summary()
         {
             var sb = new StringBuilder();
-            sb.Append($"입고 {InDone}건 완료 (대기 {WaitingInbound})  ·  출고 {OutDone}건 완료 (대기 {WaitingOutbound})");
+            sb.Append($"재고 {Stock:N0}/{Capacity:N0} ({StockLevel * 100f:0}%)  ·  입고 {InDone}건 완료 (대기 {WaitingInbound})  ·  출고 {OutDone}건 완료 (대기 {WaitingOutbound})");
             if (SimTime > 600f) sb.Append($"  ·  시간당 {ThroughputPerHour:0}건 (피크 필요 {_plan.RequiredThroughput:0})");
             sb.Append("  ·  가동률 ");
             sb.Append(string.Join(", ", Utilization().Select(kv => $"{kv.Key} {kv.Value * 100f:0}%")));
@@ -526,11 +547,14 @@ namespace LayoutRecommender.Simulation
             var sb = new StringBuilder();
             var t = System.TimeSpan.FromSeconds(SimTime);
             sb.AppendLine($"시뮬레이션 시간  {(int)t.TotalHours:00}:{t.Minutes:00}:{t.Seconds:00}  (피크 시간 발생률 기준)");
+            sb.AppendLine($"재고  {Stock:N0} / {Capacity:N0} 위치  ({StockLevel * 100f:0}%)");
             sb.AppendLine($"입고  발생 {InCreated} · 완료 {InDone} · 대기 {WaitingInbound}");
             sb.AppendLine($"출고  발생 {OutCreated} · 완료 {OutDone} · 대기 {WaitingOutbound}");
             if (SimTime > 600f) sb.AppendLine($"처리 실적  시간당 {ThroughputPerHour:0}건 / 피크 필요 {_plan.RequiredThroughput:0}건");
             sb.AppendLine("가동률");
             foreach (var kv in Utilization()) sb.AppendLine($"   · {kv.Key}  {kv.Value * 100f:0}%");
+            if (StockOutSkipped > 0) sb.AppendLine($"※ 재고가 없어 출고하지 못한 건 {StockOutSkipped}건");
+            if (FullSkipped > 0) sb.AppendLine($"※ 보관 위치가 꽉 차 받지 못한 입고 {FullSkipped}건");
             int waiting = _waiting.Count;
             if (SimTime > 1800f && waiting > Mathf.Max(5, _movers.Count * 2))
                 sb.AppendLine("※ 대기 작업이 쌓이고 있습니다. 운반 설비가 부족할 수 있습니다.");

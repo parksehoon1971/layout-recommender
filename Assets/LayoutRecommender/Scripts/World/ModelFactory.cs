@@ -47,10 +47,10 @@ namespace LayoutRecommender.World
             {
                 case ItemShape.RackRow:
                     bool asrs = item.Type != EquipmentType.SelectiveRack;
-                    RackRow(mb, s, item, asrs ? Steel : RackBlue, asrs ? Silver : BeamOrange);
+                    RackRow(mb, null, s, item, asrs ? Steel : RackBlue, asrs ? Silver : BeamOrange, 0f);
                     break;
                 case ItemShape.ShuttleBlock:
-                    ShuttleBlock(mb, s, item);
+                    ShuttleBlock(mb, null, s, item, 0f);
                     break;
                 case ItemShape.Conveyor:
                     Conveyor(mb, s, EquipmentCatalog.Get(item.Type).Color);
@@ -155,8 +155,23 @@ namespace LayoutRecommender.World
         // 보관 설비
         // ================================================================
 
-        /// <summary>선택식/자동창고 랙 한 열: 프레임(기둥+브레이싱), 단마다 빔, 칸마다 적재물</summary>
-        static void RackRow(MeshBuilder mb, Vector3 s, PlacedItem item, Color frame, Color beam)
+        /// <summary>
+        /// 랙/셔틀랙에 적재된 화물만 따로 만든다 (level: 0~1 재고 수준).
+        /// 칸마다 고정된 난수를 써서 재고 수준을 올리면 화물이 더해지고 내리면 빠지는 모습이 된다.
+        /// </summary>
+        public static GameObject BuildLoads(PlacedItem item, float level, Transform parent)
+        {
+            var mb = new MeshBuilder();
+            if (item.Shape == ItemShape.RackRow) RackRow(null, mb, item.Size, item, Color.white, Color.white, level);
+            else if (item.Shape == ItemShape.ShuttleBlock) ShuttleBlock(null, mb, item.Size, item, level);
+            var go = mb.Build("Loads", parent);
+            go.transform.localPosition = Vector3.zero;
+            go.transform.localRotation = Quaternion.identity;
+            return go;
+        }
+
+        /// <summary>선택식/자동창고 랙 한 열: 프레임(기둥+브레이싱), 단마다 빔 (mb) / 칸마다 적재물 (loads)</summary>
+        static void RackRow(MeshBuilder mb, MeshBuilder loads, Vector3 s, PlacedItem item, Color frame, Color beam, float level)
         {
             int levels = Mathf.Max(1, item.Levels > 0 ? item.Levels : Mathf.RoundToInt(s.y / 1.6f));
             float pitch = item.LevelPitch > 0 ? item.LevelPitch : s.y / levels;
@@ -169,7 +184,7 @@ namespace LayoutRecommender.World
             float topY = levels * pitch;
 
             // 프레임: 각 기둥 위치에 앞뒤 기둥 + 가로대 + 사선 브레이싱
-            for (int i = 0; i <= bays; i++)
+            for (int i = 0; mb != null && i <= bays; i++)
             {
                 float z = -s.z / 2f + realBay * i;
                 mb.Box(new Vector3(-hx, topY / 2f, z), new Vector3(0.09f, topY, 0.09f), frame);
@@ -187,7 +202,7 @@ namespace LayoutRecommender.World
             }
 
             // 빔: 1단은 바닥 적치, 2단부터 빔 위
-            for (int l = 1; l <= levels; l++)
+            for (int l = 1; mb != null && l <= levels; l++)
             {
                 float y = l * pitch - 0.06f;
                 if (l == levels) y = topY - 0.06f;
@@ -196,6 +211,7 @@ namespace LayoutRecommender.World
             }
 
             // 적재물
+            if (loads == null) return;
             var rnd = new System.Random(item.Label != null ? item.Label.GetHashCode() : 7);
             var d = new Vector3(s.x - 0.15f, Mathf.Max(0.2f, pitch - (item.Unit == LoadUnitType.Pallet ? 0.3f : 0.12f)), slotW - 0.12f);
             int slots = bays * perBay;
@@ -204,17 +220,19 @@ namespace LayoutRecommender.World
                 float y = l == 0 ? 0f : l * pitch;
                 for (int j = 0; j < slots; j++)
                 {
-                    if (rnd.NextDouble() > item.Fill) continue;
+                    double r = rnd.NextDouble();
+                    float hScale = 0.75f + 0.25f * (float)rnd.NextDouble();
+                    int variant = rnd.Next(3);
+                    if (r >= level) continue;
                     int bay = j / perBay, inBay = j % perBay;
                     float z = -s.z / 2f + realBay * bay + 0.05f + (inBay + 0.5f) * ((realBay - 0.1f) / perBay);
-                    float hScale = 0.75f + 0.25f * (float)rnd.NextDouble();
-                    CargoUnit(mb, new Vector3(0, y, z), new Vector3(d.x, d.y * hScale, d.z), item.Unit, rnd.Next(3));
+                    CargoUnit(loads, new Vector3(0, y, z), new Vector3(d.x, d.y * hScale, d.z), item.Unit, variant);
                 }
             }
         }
 
         /// <summary>셔틀랙 블록: 레인마다 레일, 기둥 격자, 레인 단위로 채운 적재물</summary>
-        static void ShuttleBlock(MeshBuilder mb, Vector3 s, PlacedItem item)
+        static void ShuttleBlock(MeshBuilder mb, MeshBuilder loads, Vector3 s, PlacedItem item, float level)
         {
             var frame = new Color(0.20f, 0.30f, 0.55f);
             int levels = Mathf.Max(1, item.Levels);
@@ -225,7 +243,7 @@ namespace LayoutRecommender.World
             float topY = levels * pitch;
             int posts = Mathf.Max(2, Mathf.RoundToInt(s.z / 2.5f));
 
-            for (int i = 0; i <= lanes; i++)
+            for (int i = 0; mb != null && i <= lanes; i++)
             {
                 float x = -s.x / 2f + laneW * i;
                 for (int k = 0; k <= posts; k++)
@@ -237,6 +255,7 @@ namespace LayoutRecommender.World
                     mb.Box(new Vector3(x, l * pitch - 0.05f, 0), new Vector3(0.1f, 0.1f, s.z), Silver);  // 셔틀 레일
             }
 
+            if (loads == null) return;
             var rnd = new System.Random(item.Label != null ? item.Label.GetHashCode() : 11);
             float unitLen = CargoDims.z + 0.1f;
             int perLane = Mathf.Max(1, Mathf.FloorToInt(s.z / unitLen));
@@ -245,22 +264,24 @@ namespace LayoutRecommender.World
                 float x = -s.x / 2f + laneW * (i + 0.5f);
                 for (int l = 0; l < levels; l++)
                 {
-                    float fill = Mathf.Clamp01(item.Fill + ((float)rnd.NextDouble() - 0.5f) * 0.5f);
+                    float jitter = ((float)rnd.NextDouble() - 0.5f) * 0.4f;
+                    float hJit = (float)rnd.NextDouble();
+                    float fill = level <= 0f ? 0f : Mathf.Clamp01(level + jitter * Mathf.Min(1f, level * 2f));
                     int n = Mathf.RoundToInt(perLane * fill);
                     if (n <= 0) continue;
                     float y = l == 0 ? 0f : l * pitch;
                     float len = n * unitLen;
                     // 레인 안쪽(출고면 반대쪽)부터 채운 모습: 연속 파렛트 줄
                     float zc = s.z / 2f - len / 2f;
-                    var d = new Vector3(laneW - 0.25f, Mathf.Max(0.2f, pitch - 0.3f) * (0.8f + 0.2f * (float)rnd.NextDouble()), len - 0.1f);
+                    var d = new Vector3(laneW - 0.25f, Mathf.Max(0.2f, pitch - 0.3f) * (0.8f + 0.2f * hJit), len - 0.1f);
                     if (item.Unit == LoadUnitType.Pallet)
                     {
-                        mb.Box(new Vector3(x, y + 0.07f, zc), new Vector3(d.x, 0.14f, d.z), Wood);
-                        mb.Box(new Vector3(x, y + 0.14f + (d.y - 0.14f) / 2f, zc), new Vector3(d.x * 0.96f, d.y - 0.14f, d.z), l % 2 == 0 ? Carton : CartonDark);
+                        loads.Box(new Vector3(x, y + 0.07f, zc), new Vector3(d.x, 0.14f, d.z), Wood);
+                        loads.Box(new Vector3(x, y + 0.14f + (d.y - 0.14f) / 2f, zc), new Vector3(d.x * 0.96f, d.y - 0.14f, d.z), l % 2 == 0 ? Carton : CartonDark);
                     }
                     else
                     {
-                        mb.Box(new Vector3(x, y + d.y / 2f, zc), new Vector3(d.x, d.y, d.z), item.Unit == LoadUnitType.Tote ? ToteBlue : Carton);
+                        loads.Box(new Vector3(x, y + d.y / 2f, zc), new Vector3(d.x, d.y, d.z), item.Unit == LoadUnitType.Tote ? ToteBlue : Carton);
                     }
                 }
             }

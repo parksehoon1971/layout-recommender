@@ -131,6 +131,8 @@ namespace LayoutRecommender.World
             }
 
             var go = ModelFactory.Build(item, parent);
+            if (item.Shape == ItemShape.RackRow || item.Shape == ItemShape.ShuttleBlock)
+                ModelFactory.BuildLoads(item, 0.85f, go.transform);
             var lift = go.transform.Find("Lift");
             if (lift != null) lift.localPosition = new Vector3(0, 2.5f, 0);
 
