@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using LayoutRecommender.Data;
+using LayoutRecommender.RL;
 using LayoutRecommender.UI;
 using UnityEngine;
 using UnityEngine.UI;
@@ -39,6 +40,9 @@ namespace LayoutRecommender.Screens
         // 3D 바닥
         GameObject _floor;
 
+        // 자동 배치 결과 (기준선)
+        LayoutView _layoutView;
+
         public override void Build(RectTransform root)
         {
             BuildFloor();
@@ -61,6 +65,37 @@ namespace LayoutRecommender.Screens
         void OnDestroy()
         {
             if (_floor != null) Destroy(_floor);
+            if (_layoutView != null) Destroy(_layoutView.gameObject);
+        }
+
+        // ---------- 자동 배치 (탐욕 기준선, 이후 학습된 RL 정책으로 교체) ----------
+
+        void RunAutoLayout()
+        {
+            var problem = LayoutProblem.FromInput(In);
+            var env = new LayoutEnv();
+            bool ok = GreedyPlacer.Solve(env, problem, out float cost);
+
+            if (_layoutView == null)
+            {
+                _layoutView = new GameObject("AutoLayout").AddComponent<LayoutView>();
+                _layoutView.transform.position = Vector3.up * 0.01f;
+                _layoutView.ShowFloor = false; // 건물 바닥은 이미 있다
+            }
+            _layoutView.CellW = problem.CellW;
+            _layoutView.CellD = problem.CellD;
+            _layoutView.Render(env);
+
+            if (ok)
+            {
+                SetProgress(1f, $"자동 배치 완료 (기준선)  ·  물동량×거리 {cost / 1000f:N1} 천 단위·m/일");
+                Log($"구역 {env.Placed.Count}개 배치 · 점유율 {env.FillRatio * 100f:0}% · 격자 {LayoutProblem.GridW}×{LayoutProblem.GridH}, 셀 {problem.CellW:0.#}×{problem.CellD:0.#} m");
+            }
+            else
+            {
+                SetProgress(env.Placed.Count / (float)Mathf.Max(1, problem.Zones.Count), "자동 배치 실패: 통로를 막지 않고 놓을 위치가 없습니다.");
+                Log("건물 크기를 늘리거나 보관 필요량을 줄여 보세요.");
+            }
         }
 
         // ---------- 3D 바닥 (건물 외곽) ----------
@@ -119,6 +154,7 @@ namespace LayoutRecommender.Screens
             var spacerR = UIFactory.Rect(bar, "Spacer");
             UIFactory.Size(spacerR, flexWidth: 1);
 
+            UIFactory.Size(UIFactory.CreateButton(bar, "자동 배치", RunAutoLayout, Theme.AccentDim, 20), width: 130);
             UIFactory.Size(UIFactory.CreateButton(bar, "입력 수정", () => App.ShowInput(), Theme.PanelLight, 20), width: 130);
             UIFactory.Size(UIFactory.CreateButton(bar, "처음으로", () => App.ShowStart(), Theme.PanelLight, 20), width: 130);
         }

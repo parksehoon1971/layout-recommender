@@ -35,3 +35,6 @@ crashlytics-build.properties
 # 에디터 설정 스크립트가 PC마다 자동 생성하는 URP 에셋
 /Assets/LayoutRecommender/Settings/
 /Assets/LayoutRecommender/Settings.meta
+
+# ML-Agents 학습 결과 (모델 체크포인트, TensorBoard 로그)
+/results/
