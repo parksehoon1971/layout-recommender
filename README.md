@@ -28,6 +28,11 @@
 | 저장 | '레이아웃 생성'을 누르면 입력값이 `persistentDataPath/last_input.json`에 저장됩니다. |
 | 레이아웃 화면 HUD 틀 | 좌측: 카테고리별 설비 팔레트(보관/운반/이송/인력) · 우측: 선택한 개체의 속성창 · 상단: 시뮬레이션 시간, ▶/∥/■, 배속 · 하단: 진행률과 로그 · 가운데: 건물 크기에 맞춘 3D 바닥 |
 
+## 강화학습 자동 배치 (Unity ML-Agents)
+입고·보관·피킹·포장·출고 구역을 격자에 하나씩 놓는 에이전트를 PPO로 학습합니다. 설치, 학습, 모델 적용 방법은 [ml-agents/README.md](ml-agents/README.md)에 있습니다.
+- 메뉴 **Tools → Layout Recommender → 강화학습 → 학습 씬 만들기 / 시연 씬 만들기**
+- 레이아웃 화면 상단의 **자동 배치** 버튼은 지금은 탐욕 기준선으로 배치합니다. 학습된 모델 연결은 다음 단계입니다.
+
 ## 폴더 구조
 ```
 Assets/LayoutRecommender/Scripts
@@ -39,7 +44,16 @@ Assets/LayoutRecommender/Scripts
    ├─ ScreenBase.cs
    ├─ StartScreen.cs
    ├─ InputWizardScreen.cs
-   └─ LayoutScreen.cs          HUD 틀 (2~3단계에서 자동 배치/시뮬레이션 연결)
+   └─ LayoutScreen.cs          HUD 틀, 자동 배치 버튼
+Assets/LayoutRecommender/RL
+├─ Scripts/LayoutProblem.cs    구역·물동량·도크 문제 정의 (입력값 변환, 학습용 무작위 생성)
+├─ Scripts/LayoutEnv.cs        격자 상태, 유효 위치(마스킹), 통로거리 비용
+├─ Scripts/GreedyPlacer.cs     탐욕 기준선
+├─ Scripts/LayoutPlacementAgent.cs  ML-Agents 에이전트 (관측/행동/보상)
+├─ Scripts/LayoutGridSensor.cs 격자 이미지 관측 센서
+├─ Scripts/LayoutView.cs       배치 결과 3D 표시
+└─ Editor/LayoutRLSceneBuilder.cs  학습/시연 씬 생성 메뉴
+ml-agents/layout_ppo.yaml      PPO 학습 설정 (커리큘럼 포함)
 ```
 
 ## 다음 단계
